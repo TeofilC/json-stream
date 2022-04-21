@@ -66,15 +66,16 @@ static int inline isHighSurrogate(uint16_t c)
 
 // Decode, return non-zero value on error
 int
-_jstream_decode_string(uint16_t *const dest, size_t *destoff,
+_jstream_decode_string(uint8_t *const dest, size_t *destoff,
                        const uint8_t *s, const uint8_t *const srcend)
 {
-  uint16_t *d = dest + *destoff;
+  uint8_t *d = dest + *destoff;
   uint32_t state = 0;
   uint32_t codepoint;
 
   int surrogate = 0;
   uint16_t unidata;
+  uint16_t high_surrigate;
 
   // Optimized version of dispatch when just an ASCII char is expected
   #define DISPATCH_ASCII(label) {\
@@ -98,11 +99,20 @@ _jstream_decode_string(uint16_t *const dest, size_t *destoff,
 
         if (codepoint == '\\')
           DISPATCH_ASCII(backslash)
-        else if (codepoint <= 0xffff)
-          *d++ = (uint16_t) codepoint;
-        else {
-          *d++ = (uint16_t) (0xD7C0 + (codepoint >> 10));
-          *d++ = (uint16_t) (0xDC00 + (codepoint & 0x3FF));
+        else if (codepoint <= 0x7F)
+          *d++ = (uint8_t) codepoint;
+        else if (codepoint <= 0x07FF) {
+          *d++ = (uint8_t) (0xC0 + (codepoint >> 6));
+          *d++ = (uint8_t) (0x80 + (codepoint & 0x3F));
+        } else if (codepoint <= 0xffff) {
+          *d++ = (uint8_t) (0xE0 + (codepoint >> 12));
+          *d++ = (uint8_t) (0x80 + ((codepoint >> 6) & 0x3F));
+          *d++ = (uint8_t) (0x80 + ((codepoint) & 0x3F));
+        } else {
+          *d++ = (uint8_t) (0xF0 + (codepoint >> 18));
+          *d++ = (uint8_t) (0x80 + ((codepoint >> 12) & 0x3F));
+          *d++ = (uint8_t) (0x80 + ((codepoint >> 6) & 0x3F));
+          *d++ = (uint8_t) (0x80 + ((codepoint) & 0x3F));
         }
     }
     *destoff = d - dest;
@@ -113,7 +123,7 @@ _jstream_decode_string(uint16_t *const dest, size_t *destoff,
       case '"':
       case '\\':
       case '/':
-        *d++ = (uint16_t) codepoint;
+        *d++ = (uint8_t) codepoint;
         goto standard;
         break;
       case 'b': *d++ = '\b';goto standard;
@@ -144,7 +154,7 @@ _jstream_decode_string(uint16_t *const dest, size_t *destoff,
     if (!ishexnum(codepoint))
       return -1;
     unidata |= decode_hex(codepoint);
-    *d++ = (uint16_t) unidata;
+
 
     if (surrogate) {
       if (!isLowSurrogate(unidata))
@@ -153,9 +163,38 @@ _jstream_decode_string(uint16_t *const dest, size_t *destoff,
     } else {
       if (isHighSurrogate(unidata)) {
         surrogate = 1;
+        high_surrigate = unidata;
         DISPATCH_ASCII(surrogate1);
-      } else if (isLowSurrogate(unidata))
+      } else if (isLowSurrogate(unidata)) {
         return -1;
+      }
+    }
+
+    if (!surrogate)  {
+        if(high_surrigate){
+         codepoint = ((high_surrigate - 0xD800) << 10) + (unidata - 0xDC00) + 0x10000;
+         high_surrigate = 0;
+        } else {
+          codepoint = unidata;
+        }
+
+        if (codepoint == '\\')
+          return -1;
+        else if (codepoint <= 0x7F)
+          *d++ = (uint8_t) codepoint;
+        else if (codepoint <= 0x07FF) {
+          *d++ = (uint8_t) (0xC0 + (codepoint >> 6));
+          *d++ = (uint8_t) (0x80 + (codepoint & 0x3F));
+        } else if (codepoint <= 0xffff) {
+          *d++ = (uint8_t) (0xE0 + (codepoint >> 12));
+          *d++ = (uint8_t) (0x80 + ((codepoint >> 6) & 0x3F));
+          *d++ = (uint8_t) (0x80 + ((codepoint) & 0x3F));
+        } else {
+          *d++ = (uint8_t) (0xF0 + (codepoint >> 18));
+          *d++ = (uint8_t) (0x80 + ((codepoint >> 12) & 0x3F));
+          *d++ = (uint8_t) (0x80 + ((codepoint >> 6) & 0x3F));
+          *d++ = (uint8_t) (0x80 + ((codepoint) & 0x3F));
+        }
     }
     goto standard;
   surrogate1:
